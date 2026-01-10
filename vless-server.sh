@@ -7467,6 +7467,9 @@ manage_warp() {
                     # 切换到 WGCF
                     _info "切换到 WGCF 模式..."
                     warp-cli disconnect 2>/dev/null
+                    # 停止 warp-svc 服务，避免与 WGCF 冲突
+                    systemctl stop warp-svc 2>/dev/null
+                    systemctl disable warp-svc 2>/dev/null
                     if register_warp; then
                         db_set_warp_mode "wgcf"
                         _regenerate_proxy_configs
@@ -9097,6 +9100,10 @@ parse_proxy_link() {
             local sid=$(echo "$params" | grep -oP 'sid=\K[^&]+' || echo "")
             local flow=$(echo "$params" | grep -oP 'flow=\K[^&]+' || echo "")
             local encryption=$(echo "$params" | grep -oP 'encryption=\K[^&]+' || echo "none")
+            # 提取 ws 协议的 path 和 host 参数
+            local ws_path=$(echo "$params" | grep -oP 'path=\K[^&]+' || echo "/")
+            ws_path=$(urldecode "$ws_path")  # URL 解码 path
+            local ws_host=$(echo "$params" | grep -oP 'host=\K[^&]+' || echo "")
             [[ -z "$encryption" ]] && encryption="none"
             
             [[ -z "$name" ]] && name="VLESS-${host##*.}"
@@ -9104,7 +9111,8 @@ parse_proxy_link() {
                 --arg name "$name" --arg host "$host" --argjson port "$port" \
                 --arg uuid "$uuid" --arg security "$security" --arg sni "$sni" \
                 --arg fp "$fp" --arg net "$net" --arg pbk "$pbk" --arg sid "$sid" --arg flow "$flow" --arg enc "$encryption" \
-                '{name:$name,type:"vless",server:$host,port:$port,uuid:$uuid,security:$security,sni:$sni,fingerprint:$fp,network:$net,publicKey:$pbk,shortId:$sid,flow:$flow,encryption:$enc}')
+                --arg wsPath "$ws_path" --arg wsHost "$ws_host" \
+                '{name:$name,type:"vless",server:$host,port:$port,uuid:$uuid,security:$security,sni:$sni,fingerprint:$fp,network:$net,publicKey:$pbk,shortId:$sid,flow:$flow,encryption:$enc,wsPath:$wsPath,wsHost:$wsHost}')
             ;;
         trojan://*)
             # Trojan 格式: trojan://password@host:port?params#name
@@ -9313,11 +9321,23 @@ gen_xray_chain_outbound() {
             local sid=$(echo "$node" | jq -r '.shortId // ""')
             local flow=$(echo "$node" | jq -r '.flow // ""')
             local encryption=$(echo "$node" | jq -r '.encryption // "none"')
+            local net=$(echo "$node" | jq -r '.network // "tcp"')
+            local ws_path=$(echo "$node" | jq -r '.wsPath // "/"')
+            local ws_host=$(echo "$node" | jq -r '.wsHost // ""')
             # 如果 encryption 为空，默认使用 none
             [[ -z "$encryption" ]] && encryption="none"
             
             local stream='{"network":"tcp"}'
-            if [[ "$security" == "reality" ]]; then
+            if [[ "$net" == "ws" ]]; then
+                # WebSocket 传输
+                if [[ "$security" == "tls" ]]; then
+                    stream=$(jq -n --arg path "$ws_path" --arg host "$ws_host" --arg sni "$sni" --arg fp "$fp" \
+                        '{network:"ws",wsSettings:{path:$path,headers:{Host:$host}},security:"tls",tlsSettings:{serverName:$sni,fingerprint:$fp}}')
+                else
+                    stream=$(jq -n --arg path "$ws_path" --arg host "$ws_host" \
+                        '{network:"ws",wsSettings:{path:$path,headers:{Host:$host}}}')
+                fi
+            elif [[ "$security" == "reality" ]]; then
                 stream=$(jq -n --arg sni "$sni" --arg fp "$fp" --arg pbk "$pbk" --arg sid "$sid" \
                     '{network:"tcp",security:"reality",realitySettings:{serverName:$sni,fingerprint:$fp,publicKey:$pbk,shortId:$sid}}')
             elif [[ "$security" == "tls" ]]; then
@@ -9431,11 +9451,21 @@ gen_singbox_chain_outbound() {
             local fp=$(echo "$node" | jq -r '.fingerprint // "chrome"')
             local pbk=$(echo "$node" | jq -r '.publicKey // ""')
             local sid=$(echo "$node" | jq -r '.shortId // ""')
+            local net=$(echo "$node" | jq -r '.network // "tcp"')
+            local ws_path=$(echo "$node" | jq -r '.wsPath // "/"')
+            local ws_host=$(echo "$node" | jq -r '.wsHost // ""')
             
             local base=$(jq -n --arg tag "$tag" --arg server "$server" --argjson port "$port" --arg uuid "$uuid" --arg ds "$domain_strategy" \
                 '{tag:$tag,type:"vless",server:$server,server_port:$port,uuid:$uuid,domain_strategy:$ds}')
             
-            if [[ "$security" == "reality" ]]; then
+            # 处理 WebSocket 传输
+            if [[ "$net" == "ws" ]]; then
+                base=$(echo "$base" | jq --arg path "$ws_path" --arg host "$ws_host" \
+                    '.transport={type:"ws",path:$path,headers:{Host:$host}}')
+                if [[ "$security" == "tls" ]]; then
+                    base=$(echo "$base" | jq --arg sni "$sni" '.tls={enabled:true,server_name:$sni}')
+                fi
+            elif [[ "$security" == "reality" ]]; then
                 base=$(echo "$base" | jq --arg sni "$sni" --arg fp "$fp" --arg pbk "$pbk" --arg sid "$sid" \
                     '.tls={enabled:true,server_name:$sni,reality:{enabled:true,public_key:$pbk,short_id:$sid},utls:{enabled:true,fingerprint:$fp}}')
             elif [[ "$security" == "tls" ]]; then
