@@ -11726,6 +11726,65 @@ _import_subscription_interactive() {
 }
 
 # 链式代理管理菜单
+# 一键导入 Alice 台湾家宽节点 (8个出口)
+_import_alice_nodes() {
+    _header
+    echo -e "  ${W}导入 Alice 台湾家宽节点${NC}"
+    _line
+    echo -e "  ${D}Alice 提供 8 个台湾家宽出口 (端口 10001-10008)${NC}"
+    echo ""
+    
+    local server="2a14:67c0:116::1"
+    local username="alice"
+    local password="alicefofo123..OVO"
+    local base_port=10001
+    local imported=0
+    local skipped=0
+    
+    echo -e "  ${C}▸${NC} 开始导入..."
+    echo ""
+    
+    for i in {1..8}; do
+        local port=$((base_port + i - 1))
+        local name="Alice-台湾家宽-${i}"
+        
+        # 检查是否已存在
+        if db_chain_node_exists "$name"; then
+            echo -e "  ${Y}⊘${NC} $name ${D}(已存在，跳过)${NC}"
+            ((skipped++))
+            continue
+        fi
+        
+        # 构建节点 JSON
+        local node=$(jq -n \
+            --arg name "$name" \
+            --arg server "$server" \
+            --argjson port "$port" \
+            --arg username "$username" \
+            --arg password "$password" \
+            '{name:$name,type:"socks",server:$server,port:$port,username:$username,password:$password}')
+        
+        if db_add_chain_node "$node"; then
+            echo -e "  ${G}✓${NC} $name ${D}(端口: $port)${NC}"
+            ((imported++))
+        else
+            echo -e "  ${R}✗${NC} $name ${D}(添加失败)${NC}"
+        fi
+    done
+    
+    echo ""
+    _line
+    if [[ $imported -gt 0 ]]; then
+        _ok "成功导入 $imported 个节点"
+        [[ $skipped -gt 0 ]] && _info "跳过 $skipped 个已存在节点"
+        echo ""
+        echo -e "  ${Y}提示:${NC} 请到 ${C}分流规则${NC} 中配置使用这些节点"
+    else
+        _info "没有新节点导入 (已存在 $skipped 个)"
+    fi
+    _pause
+}
+
 manage_chain_proxy() {
     while true; do
         _header
@@ -11764,9 +11823,10 @@ manage_chain_proxy() {
         
         _item "1" "添加节点 (分享链接)"
         _item "2" "导入订阅"
-        _item "3" "测试所有节点延迟"
-        _item "4" "删除节点"
-        _item "5" "禁用链式代理"
+        _item "3" "一键导入 Alice 台湾家宽"
+        _item "4" "测试所有节点延迟"
+        _item "5" "删除节点"
+        _item "6" "禁用链式代理"
         _item "0" "返回"
         _line
         
@@ -11780,6 +11840,9 @@ manage_chain_proxy() {
                 _import_subscription_interactive
                 ;;
             3)
+                _import_alice_nodes
+                ;;
+            4)
                 # 测试所有节点延迟
                 _header
                 echo -e "  ${W}测试节点延迟 ${D}(仅供参考)${NC}"
@@ -11854,7 +11917,7 @@ manage_chain_proxy() {
                 _line
                 _pause
                 ;;
-            4)
+            5)
                 _header
                 echo -e "  ${W}删除节点${NC}"
                 _line
@@ -11900,7 +11963,7 @@ manage_chain_proxy() {
                 fi
                 _pause
                 ;;
-            5)
+            6)
                 local tmp=$(mktemp)
                 jq 'del(.chain_proxy.active)' "$DB_FILE" > "$tmp" && mv "$tmp" "$DB_FILE"
                 _ok "已禁用链式代理"
