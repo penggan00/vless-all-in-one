@@ -13922,6 +13922,13 @@ do_uninstall() {
     check_installed || { _warn "未安装"; return; }
     read -rp "  确认卸载? [y/N]: " confirm
     [[ ! "$confirm" =~ ^[yY]$ ]] && return
+
+    local installed_protocols=""
+    installed_protocols=$(get_installed_protocols 2>/dev/null || true)
+    local has_naive=false
+    if grep -qx "naive" <<<"$installed_protocols" || [[ -f "$CFG/naive.join" ]] || [[ -f "$CFG/Caddyfile" ]]; then
+        has_naive=true
+    fi
     
     _info "停止所有服务..."
     stop_services
@@ -14033,7 +14040,14 @@ do_uninstall() {
     fi
     
     _info "删除快捷命令..."
-    rm -f /usr/local/bin/vless /usr/local/bin/vless.sh /usr/bin/vless 2>/dev/null
+    rm -f /usr/local/bin/vless /usr/local/bin/vless.sh /usr/local/bin/vless-server.sh /usr/bin/vless 2>/dev/null
+    
+    # 若安装过 NaïveProxy，清理带 forward_proxy 模块的 Caddy
+    if [[ "$has_naive" == "true" ]]; then
+        if check_cmd caddy && caddy list-modules 2>/dev/null | grep -q "http.handlers.forward_proxy"; then
+            rm -f /usr/local/bin/caddy 2>/dev/null
+        fi
+    fi
     
     _ok "卸载完成"
     echo ""
